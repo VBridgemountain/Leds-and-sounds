@@ -1,0 +1,192 @@
+For ardino esp32
+
+C++
+
+#include <FastLED.h>
+
+// --- LED CONFIGURATION ---
+#define LED_COUNT    4      // Total number of RGB LEDs (e.g., NeoPixels)
+#define LED_DATA_PIN 2      // The ESP32 data pin connected to the LEDs
+#define LED_TYPE     WS2812B // Type of RGB LED chip (adjust if yours is different)
+#define COLOR_ORDER  GRB    // Color order (common for WS2812B/NeoPixels)
+
+CRGB leds[LED_COUNT];       // Array to hold the color of each LED
+
+// --- PIN DEFINITIONS ---
+const int BTN_ON = 27;         // Button to power on/off
+const int BTN_ACTIVATE = 26;   // Button to activate/deactivate
+
+// LED mapping (indices 0 to 3)
+#define LED_MAIN 0  // Corresponds to LED_1 in the previous code (always on)
+#define LED_B1   1  // Corresponds to LED_2 in the previous code (blink 1)
+#define LED_B2   2  // Corresponds to LED_3 in the previous code (blink 2)
+#define LED_B3   3  // Corresponds to LED_4 in the previous code (blink 3)
+
+// --- STATE MACHINE DEFINITIONS ---
+enum SystemState {
+  STATE_OFF = 0,
+  STATE_INITIAL_WHITE,       // 4 White LEDs on, slow wandering blink
+  STATE_ACTIVATED_RED,       // 4 Red LEDs on, fast wandering blink
+  STATE_DEACTIVATING_WHITE   // 4 White LEDs on, slow wandering blink (transition)
+};
+
+SystemState currentState = STATE_OFF;
+
+// --- TIMING VARIABLES ---
+unsigned long previousMillis = 0;
+int blinkStep = 0;              // Used to track which LED to turn on/off (1-2-3 sequence)
+
+// Blinking timing intervals (in milliseconds)
+const long BLINK_INTERVAL_SLOW = 150; // Slow: 1-2-3 cycle takes 3 * 150 = 450ms
+const long BLINK_INTERVAL_FAST = 50;  // Fast: 1-2-3 cycle takes 3 * 50 = 150ms
+
+
+// =========================================================
+// FUNCTION PLACEHOLDERS FOR SOUNDS AND COLOR CONTROL
+// =========================================================
+
+// *** IMPORTANT: Insert your actual sound code here (e.g., DFPlayer Mini) ***
+void playSound(const char* soundName) {
+  // e.g., if using DFPlayer Mini: myDFPlayer.play(fileNumber);
+  Serial.print("🔊 Playing Sound: ");
+  Serial.println(soundName);
+}
+
+// Function to set the base color for all LEDs
+void setBaseColor(CRGB color) {
+    for (int i = 0; i < LED_COUNT; i++) {
+        leds[i] = color;
+    }
+    FastLED.show(); // Push the change to the LEDs
+}
+
+// =========================================================
+// SETUP FUNCTION
+// =========================================================
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize FastLED
+  FastLED.addLeds<LED_TYPE, LED_DATA_PIN, COLOR_ORDER>(leds, LED_COUNT);
+  FastLED.setBrightness(255); // Set maximum brightness (adjust as needed)
+
+  // Set button pins as inputs with internal pull-up resistors
+  pinMode(BTN_ON, INPUT_PULLUP);
+  pinMode(BTN_ACTIVATE, INPUT_PULLUP);
+
+  // Ensure all LEDs are off initially
+  FastLED.clear();
+  FastLED.show();
+}
+
+
+// =========================================================
+// MAIN LOOP
+// =========================================================
+void loop() {
+  handleButtons();
+  handleLEDs();
+}
+
+
+// =========================================================
+// BUTTON LOGIC
+// =========================================================
+void handleButtons() {
+  // Read button states (LOW means pressed due to INPUT_PULLUP)
+  bool btnOnPressed = (digitalRead(BTN_ON) == LOW);
+  bool btnActivatePressed = (digitalRead(BTN_ACTIVATE) == LOW);
+
+  // Simple debouncing logic
+  static bool btnOnPreviousState = HIGH;
+  static bool btnActivatePreviousState = HIGH;
+
+  // --- BTN_ON Logic (Power ON/OFF) ---
+  if (btnOnPressed && btnOnPreviousState == HIGH) {
+    if (currentState == STATE_OFF) {
+      // 1. Pusch BTN_ON: Turn on, initial state (White, Slow)
+      currentState = STATE_INITIAL_WHITE;
+      playSound("on_sound");
+      setBaseColor(CRGB::White); // Set all LEDs to White
+    } else {
+      // 4. Pusch BTN_ON (again from any active state): Shut down
+      currentState = STATE_OFF;
+      playSound("total_deactivation_sound");
+      // Turn off all LEDs immediately
+      FastLED.clear();
+      FastLED.show();
+    }
+  }
+
+  // --- BTN_ACTIVATE Logic (Activate/Deactivate) ---
+  if (btnActivatePressed && btnActivatePreviousState == HIGH) {
+    if (currentState == STATE_INITIAL_WHITE || currentState == STATE_DEACTIVATING_WHITE) {
+      // 2. Pusch BTN_ACTIVATE: Go to activated state (Red, Fast)
+      currentState = STATE_ACTIVATED_RED;
+      playSound("activated_sound");
+      setBaseColor(CRGB::Red); // Set all LEDs to Red
+    } else if (currentState == STATE_ACTIVATED_RED) {
+      // 3. Pusch BTN_ACTIVATE (again): Go to deactivating state (White, Slow)
+      currentState = STATE_DEACTIVATING_WHITE;
+      playSound("deactivate_sound");
+      setBaseColor(CRGB::White); // Go back to White
+    }
+  }
+
+  // Update previous states for debouncing on the next loop
+  btnOnPreviousState = btnOnPressed;
+  btnActivatePreviousState = btnActivatePressed;
+}
+
+
+// =========================================================
+// LED BLINK/WANDERING LOGIC
+// =========================================================
+void handleLEDs() {
+  if (currentState == STATE_OFF) {
+    return; // LEDs are already off
+  }
+
+  // Determine the blink interval based on the current state
+  long currentInterval = (currentState == STATE_ACTIVATED_RED) ? BLINK_INTERVAL_FAST : BLINK_INTERVAL_SLOW;
+  CRGB activeColor = (currentState == STATE_ACTIVATED_RED) ? CRGB::Red : CRGB::White;
+
+  // Check if it's time to change the blink step
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= currentInterval) {
+    previousMillis = currentMillis;
+
+    // --- Control for the 3 Blinking LEDs (Wandering 1-2-3) ---
+
+    // 1. Reset all three blinking LEDs (turn them off)
+    leds[LED_B1] = CRGB::Black;
+    leds[LED_B2] = CRGB::Black;
+    leds[LED_B3] = CRGB::Black;
+
+    // 2. Increment step (0 -> 1 -> 2 -> 3 -> 0)
+    blinkStep = (blinkStep + 1) % 4;
+
+    // 3. Turn on the LED corresponding to the current step using the active color
+    switch (blinkStep) {
+      case 1:
+        leds[LED_B1] = activeColor; // LED_B1 (1) ON
+        break;
+      case 2:
+        leds[LED_B2] = activeColor; // LED_B2 (2) ON
+        break;
+      case 3:
+        leds[LED_B3] = activeColor; // LED_B3 (3) ON
+        break;
+      case 0:
+        // All blinking LEDs remain Black (OFF) for one step (the "gap")
+        break;
+    }
+
+    // --- Control for the Main/Fourth LED ---
+    // The main LED is always ON in any active state
+    leds[LED_MAIN] = activeColor;
+
+    // 4. Send the updated LED states to the strip
+    FastLED.show();
+  }
+}
